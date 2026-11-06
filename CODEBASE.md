@@ -15,7 +15,7 @@ Entrypoint ──> CLI/Parser ──> Domain Logic ──> Infra/IO
 
 ## 3. Module & Interface Skeleton
 
-### `src/cleaner.rs` (Role: general, Lines: 197)
+### `src/cleaner.rs` (Role: general, Lines: 202)
 - **Responsibility**: Core general logic in src/cleaner.rs
 - **Imports**: use anyhow :: { Context , Result } , use chrono :: Local , use regex :: Regex , use std :: fmt :: Write as _ , use std :: fs , use std :: path :: { Path , PathBuf } 
 - **Types & Enums**:
@@ -30,13 +30,16 @@ Entrypoint ──> CLI/Parser ──> Domain Logic ──> Infra/IO
   fn sanitize_folder (folder_path : & Path , original_folder_name : & str , magnet : & str ,) -> Result < SanitizationResult >
   ```
 
-### `src/commands.rs` (Role: general, Lines: 157)
+### `src/commands.rs` (Role: general, Lines: 197)
 - **Responsibility**: Core general logic in src/commands.rs
-- **Imports**: use crate :: config :: { load_config , save_config } , use crate :: db :: { QueueDb , QueueStatus } , use crate :: worker , use anyhow :: { Context , Result } , use colored :: Colorize , use std :: path :: { Path , PathBuf } 
+- **Imports**: use crate :: config :: { load_config , save_config } , use crate :: daemon , use crate :: db :: { QueueDb , QueueStatus } , use crate :: worker , use anyhow :: { Context , Result } , use colored :: Colorize , use std :: path :: { Path , PathBuf } 
 - **Public Functions & Signatures**:
   ```rust
   fn handle_add (magnets : & [String] , output : Option < & Path >) -> Result < () >
-  async fn handle_run (watch : bool , output : Option < PathBuf >) -> Result < () >
+  async fn handle_run (watch : bool , daemon : bool , output : Option < PathBuf >) -> Result < () >
+  async fn handle_attach () -> Result < () >
+  async fn handle_stop () -> Result < () >
+  fn handle_retry (id : Option < i64 >) -> Result < () >
   fn handle_list (limit : usize) -> Result < () >
   fn handle_remove (id : i64) -> Result < () >
   fn handle_clean () -> Result < () >
@@ -59,7 +62,19 @@ Entrypoint ──> CLI/Parser ──> Domain Logic ──> Infra/IO
   fn save_config (config : & Config) -> Result < () >
   ```
 
-### `src/db.rs` (Role: general, Lines: 267)
+### `src/daemon.rs` (Role: general, Lines: 191)
+- **Responsibility**: Core general logic in src/daemon.rs
+- **Imports**: use crate :: db :: data_dir , use anyhow :: { Context , Result } , use colored :: Colorize , use std :: fs :: { self , File , OpenOptions } , use std :: io :: { BufRead , BufReader , Seek , SeekFrom } , use std :: path :: PathBuf , use std :: process :: { Command , Stdio } , use std :: time :: Duration , use tokio :: time :: sleep 
+- **Public Functions & Signatures**:
+  ```rust
+  fn pid_path () -> PathBuf
+  fn log_path () -> PathBuf
+  fn spawn_daemon (output : Option < & std :: path :: Path >) -> Result < () >
+  async fn attach_daemon () -> Result < () >
+  async fn stop_daemon () -> Result < () >
+  ```
+
+### `src/db.rs` (Role: general, Lines: 286)
 - **Responsibility**: Core general logic in src/db.rs
 - **Imports**: use anyhow :: { Context , Result } , use chrono :: Utc , use rusqlite :: { params , Connection } , use std :: fmt , use std :: fs , use std :: path :: { Path , PathBuf } 
 - **Types & Enums**:
@@ -78,12 +93,13 @@ Entrypoint ──> CLI/Parser ──> Domain Logic ──> Infra/IO
   fn update_status (& self , id : i64 , status : QueueStatus , error : Option < & str >) -> Result < () >
   fn update_name (& self , id : i64 , name : & str) -> Result < () >
   fn list_items (& self , limit : usize) -> Result < Vec < QueueItem > >
+  fn retry (& self , id : Option < i64 >) -> Result < usize >
   fn remove_item (& self , id : i64) -> Result < bool >
   fn clean_completed (& self) -> Result < usize >
   fn data_dir () -> PathBuf
   ```
 
-### `src/main.rs` (Role: general, Lines: 116)
+### `src/main.rs` (Role: general, Lines: 142)
 - **Responsibility**: Core general logic in src/main.rs
 - **Imports**: use anyhow :: Result , use clap :: { Parser , Subcommand } , use std :: path :: PathBuf 
 
@@ -96,7 +112,7 @@ Entrypoint ──> CLI/Parser ──> Domain Logic ──> Infra/IO
   async fn alert (title : & str , body : & str)
   ```
 
-### `src/worker.rs` (Role: general, Lines: 164)
+### `src/worker.rs` (Role: general, Lines: 204)
 - **Responsibility**: Core general logic in src/worker.rs
 - **Imports**: use crate :: cleaner , use crate :: config :: Config , use crate :: db :: { QueueDb , QueueItem , QueueStatus } , use crate :: notify , use anyhow :: { Context , Result } , use colored :: Colorize , use seedr_dl :: seedr :: { CachingQuery , SeedrClient , SeedrFolder } , use std :: fs , use std :: path :: { Path , PathBuf } , use std :: time :: Duration , use tokio :: time :: sleep 
 - **Public Functions & Signatures**:

@@ -214,6 +214,25 @@ impl QueueDb {
         Ok(items)
     }
 
+    /// Resets failed item(s) back to pending so they can be re-attempted.
+    ///
+    /// # Errors
+    /// Returns an error if database update fails.
+    pub fn retry(&self, id: Option<i64>) -> Result<usize> {
+        let now = Utc::now().to_rfc3339();
+        let count = match id {
+            Some(target_id) => self.conn.execute(
+                "UPDATE queue SET status = 'pending', error_msg = NULL, updated_at = ?1 WHERE id = ?2",
+                params![now, target_id],
+            )?,
+            None => self.conn.execute(
+                "UPDATE queue SET status = 'pending', error_msg = NULL, updated_at = ?1 WHERE status = 'failed'",
+                params![now],
+            )?,
+        };
+        Ok(count)
+    }
+
     /// Removes an item from the queue by ID.
     ///
     /// # Errors

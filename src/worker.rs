@@ -20,25 +20,34 @@ pub async fn process_queue(config: &Config, db: &QueueDb, watch: bool) -> Result
     println!("{}", "==> Seedr Relay Worker Started".cyan().bold());
 
     loop {
-        match db.next_pending()? {
-            Some(item) => {
-                println!("{} [{}] {}", "-> Processing:".yellow().bold(), item.id, item.name);
-                if let Err(err) = process_item(config, db, &item).await {
-                    eprintln!("{} Failed [{}]: {err:#}", "✖".red(), item.id);
-                    db.update_status(item.id, QueueStatus::Failed, Some(&format!("{err:#}")))?;
-                    if config.notify {
-                        notify::alert("Seedr Relay Failed", &format!("{}: {err:#}", item.name)).await;
-                    }
-                }
+        let Some(item) = db.next_pending()? else {
+            if !watch {
+                println!("{}", "✔ Queue is empty. All items finished.".green().bold());
+                break;
             }
-            None => {
-                if watch {
-                    sleep(Duration::from_secs(config.poll_interval_secs)).await;
-                } else {
-                    println!("{}", "✔ Queue is empty. All items finished.".green().bold());
-                    break;
-                }
-            }
+            sleep(Duration::from_secs(config.poll_interval_secs)).await;
+            continue;
+        };
+
+        handle_queue_item(config, db, &item).await?;
+    }
+    Ok(())
+}
+
+async fn handle_queue_item(config: &Config, db: &QueueDb, item: &QueueItem) -> Result<()> {
+    println!("{} [{}] {}", "-> Processing:".yellow().bold(), item.id, item.name);
+    if let Err(err) = process_item(config, db, item).await {
+        eprintln!("{} Failed [{}]: {err:#}", "✖".red(), item.id);
+        db.update_status(item.id, QueueStatus::Failed, Some(&format!("{err:#}")))?;
+
+        // Always attempt to free Seedr cloud space on failure so the next
+        // item is not blocked by an orphaned folder.
+        if let Ok(client) = get_seedr_client() {
+            purge_seedr_cloud(&client).await;
+        }
+
+        if config.notify {
+            notify::alert("Seedr Relay Failed", &format!("{}: {err:#}", item.name)).await;
         }
     }
     Ok(())
@@ -48,6 +57,11 @@ async fn process_item(config: &Config, db: &QueueDb, item: &QueueItem) -> Result
     db.update_status(item.id, QueueStatus::Caching, None)?;
 
     let client = get_seedr_client()?;
+
+    // Purge any leftover cloud items before adding a new magnet so we
+    // start from a clean slate and avoid "not enough space" errors.
+    purge_seedr_cloud(&client).await;
+
     let folder = wait_and_cache_magnet(&client, &item.magnet).await?;
     db.update_name(item.id, &folder.name)?;
 
@@ -55,7 +69,10 @@ async fn process_item(config: &Config, db: &QueueDb, item: &QueueItem) -> Result
     println!("  {} Cached in Seedr cloud ({} MB)", "✔".green(), sz_mb);
 
     if config.notify {
-        let msg = format!("Torrent: {}\nSize: {} MB\nCached in Seedr cloud. Starting local download...", folder.name, sz_mb);
+        let msg = format!(
+            "Torrent: {}\nSize: {} MB\nCached in Seedr cloud. Starting local download...",
+            folder.name, sz_mb
+        );
         notify::done("Seedr Cached Magnet", &msg).await;
     }
 
@@ -66,13 +83,12 @@ async fn process_item(config: &Config, db: &QueueDb, item: &QueueItem) -> Result
 
     let downloaded_files = download_from_cloud(&client, config, &folder, &output_dir).await?;
 
-    if config.auto_clean_cloud {
-        let _ = client.delete_folder(folder.id).await;
-    }
+    // Explicit cloud cleanup after successful download (belt + suspenders).
+    let _ = client.delete_folder(folder.id).await;
 
     let sanitized = post_process_downloads(&output_dir, &folder.name, &downloaded_files, &item.magnet)?;
     println!(
-        "  {} Saved & sanitized to: {} (Note: {})",
+        "  {} Saved & sanitized to: {} (note: {})",
         "✔".green(),
         sanitized.target_dir.display(),
         sanitized.note_path.display()
@@ -91,6 +107,27 @@ async fn process_item(config: &Config, db: &QueueDb, item: &QueueItem) -> Result
 
     db.update_status(item.id, QueueStatus::Completed, None)?;
     Ok(())
+}
+
+/// Deletes all folders and in-progress torrents from the Seedr cloud.
+/// Errors are silently ignored — this is best-effort cleanup.
+async fn purge_seedr_cloud(client: &SeedrClient) {
+    let Ok(root) = client.list_root().await else {
+        return;
+    };
+
+    if !root.folders.is_empty() {
+        let _ = client.delete_all_folders(&root.folders).await;
+        println!(
+            "  {} Purged {} orphaned cloud folder(s)",
+            "~".yellow(),
+            root.folders.len()
+        );
+    }
+
+    for torrent in &root.torrents {
+        let _ = client.delete_torrent(torrent.id).await;
+    }
 }
 
 fn get_seedr_client() -> Result<SeedrClient> {
@@ -117,19 +154,21 @@ async fn wait_and_cache_magnet(client: &SeedrClient, magnet: &str) -> Result<See
 
 async fn download_from_cloud(
     client: &SeedrClient,
-    config: &Config,
+    _config: &Config,
     folder: &SeedrFolder,
     output_dir: &Path,
 ) -> Result<Vec<PathBuf>> {
     let transfer = seedr_dl::TransferOptions {
         output_dir: output_dir.to_path_buf(),
-        delete_cloud: config.auto_clean_cloud,
+        // Do NOT auto-delete on the transfer layer — we handle deletion
+        // explicitly after success so a failure doesn't silently skip cleanup.
+        delete_cloud: false,
         notifier: None,
     };
     let seedr_cfg = seedr_dl::Config {
         download_dir: output_dir.to_path_buf(),
-        delete_after_download: config.auto_clean_cloud,
-        download_threads: 4,
+        delete_after_download: false,
+        download_threads: 2,
     };
 
     seedr_dl::transfer_download_folder(client, &seedr_cfg, folder, &transfer).await
@@ -162,3 +201,4 @@ fn post_process_downloads(
 
     cleaner::sanitize_folder(&target_dir, original_name, magnet)
 }
+

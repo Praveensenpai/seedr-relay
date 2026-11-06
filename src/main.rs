@@ -3,6 +3,7 @@
 mod cleaner;
 mod commands;
 mod config;
+mod daemon;
 mod db;
 mod notify;
 mod worker;
@@ -44,9 +45,25 @@ enum Commands {
         #[arg(short = 'w', long = "watch")]
         watch: bool,
 
+        /// Run in background as an asynchronous daemon
+        #[arg(short = 'd', long = "daemon")]
+        daemon: bool,
+
         /// Override global save directory for this run
         #[arg(short = 'o', long = "output")]
         output: Option<PathBuf>,
+    },
+
+    /// Attach to live background daemon output logs
+    Attach,
+
+    /// Gracefully stop the running background daemon
+    Stop,
+
+    /// Reset failed item(s) back to pending so they are re-attempted
+    Retry {
+        /// Specific queue item ID to retry (or omit to retry all failed)
+        id: Option<i64>,
     },
 
     /// List queued, active, and completed downloads
@@ -89,8 +106,17 @@ async fn main() -> Result<()> {
         Some(Commands::Add { magnets, output }) => {
             commands::handle_add(&magnets, output.as_deref())?;
         }
-        Some(Commands::Run { watch, output }) => {
-            commands::handle_run(watch, output).await?;
+        Some(Commands::Run { watch, daemon, output }) => {
+            commands::handle_run(watch, daemon, output).await?;
+        }
+        Some(Commands::Attach) => {
+            commands::handle_attach().await?;
+        }
+        Some(Commands::Stop) => {
+            commands::handle_stop().await?;
+        }
+        Some(Commands::Retry { id }) => {
+            commands::handle_retry(id)?;
         }
         Some(Commands::List { limit }) => {
             commands::handle_list(limit)?;

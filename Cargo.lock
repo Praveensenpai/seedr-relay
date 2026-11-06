@@ -1207,6 +1207,7 @@ dependencies = [
  "clap",
  "colored",
  "dirs",
+ "libc",
  "regex",
  "rusqlite",
  "seedr-dl",

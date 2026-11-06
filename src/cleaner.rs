@@ -133,25 +133,30 @@ fn process_dir_entries(dir: &Path, records: &mut Vec<RenameRecord>) -> Result<()
         let entry = entry?;
         let path = entry.path();
         if path.is_file() {
-            let Some(file_name) = path.file_name().and_then(|n| n.to_str()) else {
-                continue;
-            };
-            if file_name == "note.txt" {
-                continue;
-            }
-            let cleaned = clean_filename(file_name);
-            if cleaned != file_name {
-                let target = dir.join(&cleaned);
-                if !target.exists() {
-                    fs::rename(&path, &target)?;
-                }
-            }
-            records.push(RenameRecord {
-                original_name: file_name.to_string(),
-                cleaned_name: cleaned,
-            });
+            process_file_entry(dir, &path, records)?;
         }
     }
+    Ok(())
+}
+
+fn process_file_entry(dir: &Path, path: &Path, records: &mut Vec<RenameRecord>) -> Result<()> {
+    let Some(file_name) = path.file_name().and_then(|n| n.to_str()) else {
+        return Ok(());
+    };
+    if file_name == "note.txt" {
+        return Ok(());
+    }
+    let cleaned = clean_filename(file_name);
+    if cleaned != file_name {
+        let target = dir.join(&cleaned);
+        if !target.exists() {
+            fs::rename(path, &target)?;
+        }
+    }
+    records.push(RenameRecord {
+        original_name: file_name.to_string(),
+        cleaned_name: cleaned,
+    });
     Ok(())
 }
 

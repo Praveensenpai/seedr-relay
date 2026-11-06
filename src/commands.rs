@@ -1,6 +1,7 @@
 //! CLI command implementations for seedr-relay.
 
 use crate::config::{load_config, save_config};
+use crate::daemon;
 use crate::db::{QueueDb, QueueStatus};
 use crate::worker;
 use anyhow::{Context, Result};
@@ -32,14 +33,53 @@ pub fn handle_add(magnets: &[String], output: Option<&Path>) -> Result<()> {
 /// Handles the `run` command.
 ///
 /// # Errors
-/// Returns an error if worker processing fails.
-pub async fn handle_run(watch: bool, output: Option<PathBuf>) -> Result<()> {
+/// Returns an error if worker processing or daemon spawn fails.
+pub async fn handle_run(watch: bool, daemon: bool, output: Option<PathBuf>) -> Result<()> {
+    if daemon {
+        return daemon::spawn_daemon(output.as_deref());
+    }
+
     let mut config = load_config()?;
     if let Some(out) = output {
         config.save_path = out;
     }
     let db = QueueDb::open()?;
     worker::process_queue(&config, &db, watch).await
+}
+
+/// Handles the `attach` command.
+///
+/// # Errors
+/// Returns an error if log streaming fails.
+pub async fn handle_attach() -> Result<()> {
+    daemon::attach_daemon().await
+}
+
+/// Handles the `stop` command.
+///
+/// # Errors
+/// Returns an error if stopping the daemon fails.
+pub async fn handle_stop() -> Result<()> {
+    daemon::stop_daemon().await
+}
+
+/// Handles the `retry` command.
+///
+/// # Errors
+/// Returns an error if database update fails.
+pub fn handle_retry(id: Option<i64>) -> Result<()> {
+    let db = QueueDb::open()?;
+    let count = db.retry(id)?;
+    if let Some(target_id) = id {
+        if count > 0 {
+            println!("  {} Reset item [{target_id}] back to pending.", "✔".green());
+        } else {
+            println!("  {} No item found with ID [{target_id}].", "✖".red());
+        }
+    } else {
+        println!("  {} Reset {count} failed item(s) back to pending.", "✔".green());
+    }
+    Ok(())
 }
 
 /// Handles the `list` command.

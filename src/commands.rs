@@ -83,6 +83,20 @@ pub fn handle_retry(id: Option<i64>) -> Result<()> {
     Ok(())
 }
 
+/// Handles the `next` command to prioritize an item.
+///
+/// # Errors
+/// Returns an error if database update fails.
+pub fn handle_next(id: i64) -> Result<()> {
+    let db = QueueDb::open()?;
+    if db.promote_next(id)? {
+        println!("  {} Promoted item [{id}] to download next.", "✔".green().bold());
+    } else {
+        println!("  {} Item [{id}] is not pending or does not exist.", "✖".red());
+    }
+    Ok(())
+}
+
 /// Handles the `list` command.
 ///
 /// # Errors
@@ -98,10 +112,10 @@ pub fn handle_list(limit: usize) -> Result<()> {
 
     println!("  {}", "Seedr Relay Queue:".cyan().bold());
     println!(
-        "  {:<4} {:<14} {:<32} {:<40} {:<12}",
-        "ID", "STATUS", "PROGRESS", "NAME", "ADDED"
+        "  {:<4} {:<14} {:<32} {:<38} {:<12} {:<24}",
+        "ID", "STATUS", "PROGRESS", "NAME", "ADDED", "COMPLETED"
     );
-    println!("  {}", "-".repeat(106));
+    println!("  {}", "-".repeat(128));
 
     let active = daemon::load_active_progress();
     for item in items {
@@ -126,16 +140,18 @@ fn print_queue_row(item: &QueueItem, active: Option<&daemon::ActiveProgress>) {
     let progress_str = format_progress_col(item, active);
     let progress_pad = " ".repeat(32_usize.saturating_sub(visible_len(&progress_str)));
 
-    let short_name = if item.name.len() > 38 {
-        format!("{}...", &item.name[..35])
+    let short_name = if item.name.len() > 36 {
+        format!("{}...", &item.name[..33])
     } else {
         item.name.clone()
     };
 
     let human_time = format_human_time(&item.created_at);
+    let completed_str = format_completed_col(item);
+    let completed_pad = " ".repeat(24_usize.saturating_sub(visible_len(&completed_str)));
 
     println!(
-        "  {:<4} {} {progress_str}{progress_pad} {:<40} {:<12}",
+        "  {:<4} {} {progress_str}{progress_pad} {:<38} {:<12} {completed_str}{completed_pad}",
         item.id, status_display, short_name, human_time
     );
 
@@ -146,11 +162,73 @@ fn print_queue_row(item: &QueueItem, active: Option<&daemon::ActiveProgress>) {
 
 fn format_progress_col(item: &QueueItem, active: Option<&daemon::ActiveProgress>) -> String {
     match item.status {
-        QueueStatus::Pending => "queued".dimmed().to_string(),
+        QueueStatus::Pending => {
+            if item.priority > 0 {
+                format!("queued {}", "[next]".bold().cyan())
+            } else {
+                "queued".dimmed().to_string()
+            }
+        }
         QueueStatus::Caching => "caching in cloud".blue().to_string(),
         QueueStatus::Downloading => format_downloading_progress(active, item.id),
         QueueStatus::Completed => "100% complete".green().to_string(),
         QueueStatus::Failed => "failed".red().to_string(),
+    }
+}
+
+fn format_completed_col(item: &QueueItem) -> String {
+    match item.status {
+        QueueStatus::Completed => {
+            let finished_time = format_human_time(&item.updated_at);
+            let start_ref = item.started_at.as_deref().unwrap_or(&item.created_at);
+            let duration = format_duration_between(start_ref, &item.updated_at);
+            format!("{finished_time} (in {duration})").green().to_string()
+        }
+        QueueStatus::Downloading | QueueStatus::Caching => {
+            let start_ref = item.started_at.as_deref().unwrap_or(&item.updated_at);
+            let elapsed = format_duration_to_now(start_ref);
+            format!("running ({elapsed})").cyan().to_string()
+        }
+        QueueStatus::Pending => "-".dimmed().to_string(),
+        QueueStatus::Failed => "failed".red().to_string(),
+    }
+}
+
+fn format_duration_between(start_iso: &str, end_iso: &str) -> String {
+    let Ok(start_dt) = DateTime::parse_from_rfc3339(start_iso) else {
+        return "unknown".to_string();
+    };
+    let Ok(end_dt) = DateTime::parse_from_rfc3339(end_iso) else {
+        return "unknown".to_string();
+    };
+    let diff = end_dt.signed_duration_since(start_dt);
+    format_seconds(diff.num_seconds().max(0))
+}
+
+fn format_duration_to_now(start_iso: &str) -> String {
+    let Ok(start_dt) = DateTime::parse_from_rfc3339(start_iso) else {
+        return "unknown".to_string();
+    };
+    let now = Utc::now();
+    let diff = now.signed_duration_since(start_dt.with_timezone(&Utc));
+    format_seconds(diff.num_seconds().max(0))
+}
+
+fn format_seconds(secs: i64) -> String {
+    if secs < 60 {
+        format!("{secs}s")
+    } else if secs < 3600 {
+        let mins = secs / 60;
+        let rem_s = secs % 60;
+        if rem_s == 0 {
+            format!("{mins}m")
+        } else {
+            format!("{mins}m {rem_s:02}s")
+        }
+    } else {
+        let hours = secs / 3600;
+        let mins = (secs % 3600) / 60;
+        format!("{hours}h {mins}m")
     }
 }
 

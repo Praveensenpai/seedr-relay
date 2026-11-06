@@ -18,6 +18,7 @@ use tokio::time::sleep;
 /// Returns an error on unrecoverable authentication or database errors.
 pub async fn process_queue(config: &Config, db: &QueueDb, watch: bool) -> Result<()> {
     println!("{}", "==> Seedr Relay Worker Started".cyan().bold());
+    let _ = db.reset_in_progress();
 
     loop {
         let Some(item) = db.next_pending()? else {
@@ -60,6 +61,7 @@ async fn process_item(
     item: &QueueItem,
     staging_dir: &Path,
 ) -> Result<()> {
+    db.mark_started(item.id)?;
     db.update_status(item.id, QueueStatus::Caching, None)?;
 
     let client = get_seedr_client()?;

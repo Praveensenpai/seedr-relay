@@ -57,6 +57,9 @@ pub struct QueueItem {
     pub status: QueueStatus,
     pub output_dir: Option<PathBuf>,
     pub created_at: String,
+    pub updated_at: String,
+    pub started_at: Option<String>,
+    pub priority: i64,
     pub error_msg: Option<String>,
 }
 
@@ -94,10 +97,15 @@ impl QueueDb {
                 output_dir TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
+                started_at TEXT,
+                priority INTEGER NOT NULL DEFAULT 0,
                 error_msg TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_queue_status ON queue(status);",
         ).context("failed to execute queue database initialization")?;
+
+        let _ = self.conn.execute("ALTER TABLE queue ADD COLUMN started_at TEXT", []);
+        let _ = self.conn.execute("ALTER TABLE queue ADD COLUMN priority INTEGER NOT NULL DEFAULT 0", []);
         Ok(())
     }
 
@@ -112,8 +120,8 @@ impl QueueDb {
         let out_str = output_dir.map(|p| p.to_string_lossy().to_string());
 
         self.conn.execute(
-            "INSERT INTO queue (magnet, name, status, output_dir, created_at, updated_at, error_msg)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?5, NULL)",
+            "INSERT INTO queue (magnet, name, status, output_dir, created_at, updated_at, started_at, priority, error_msg)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?5, NULL, 0, NULL)",
             params![magnet, name_hint, QueueStatus::Pending.as_str(), out_str, now],
         ).context("failed to insert item into queue")?;
 
@@ -124,19 +132,22 @@ impl QueueDb {
             name: name_hint,
             status: QueueStatus::Pending,
             output_dir: output_dir.map(Path::to_path_buf),
-            created_at: now,
+            created_at: now.clone(),
+            updated_at: now,
+            started_at: None,
+            priority: 0,
             error_msg: None,
         })
     }
 
-    /// Returns the next pending queue item in FIFO order.
+    /// Returns the next pending queue item in FIFO order, prioritizing promoted items.
     ///
     /// # Errors
     /// Returns an error if querying fails.
     pub fn next_pending(&self) -> Result<Option<QueueItem>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, magnet, name, status, output_dir, created_at, error_msg
-             FROM queue WHERE status = 'pending' ORDER BY id ASC LIMIT 1",
+            "SELECT id, magnet, name, status, output_dir, created_at, updated_at, started_at, priority, error_msg
+             FROM queue WHERE status = 'pending' ORDER BY priority DESC, id ASC LIMIT 1",
         ).context("failed to prepare next_pending query")?;
 
         let mut rows = stmt.query([])?;
@@ -150,7 +161,10 @@ impl QueueDb {
                 status: QueueStatus::parse(&status_str),
                 output_dir: out_str.map(PathBuf::from),
                 created_at: row.get(5)?,
-                error_msg: row.get(6)?,
+                updated_at: row.get(6)?,
+                started_at: row.get(7)?,
+                priority: row.get(8)?,
+                error_msg: row.get(9)?,
             }))
         } else {
             Ok(None)
@@ -189,7 +203,7 @@ impl QueueDb {
     /// Returns an error if querying fails.
     pub fn list_items(&self, limit: usize) -> Result<Vec<QueueItem>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, magnet, name, status, output_dir, created_at, error_msg
+            "SELECT id, magnet, name, status, output_dir, created_at, updated_at, started_at, priority, error_msg
              FROM queue ORDER BY id DESC LIMIT ?1",
         ).context("failed to prepare list_items query")?;
 
@@ -203,7 +217,10 @@ impl QueueDb {
                 status: QueueStatus::parse(&status_str),
                 output_dir: out_str.map(PathBuf::from),
                 created_at: row.get(5)?,
-                error_msg: row.get(6)?,
+                updated_at: row.get(6)?,
+                started_at: row.get(7)?,
+                priority: row.get(8)?,
+                error_msg: row.get(9)?,
             })
         })?;
 
@@ -212,6 +229,51 @@ impl QueueDb {
             items.push(r?);
         }
         Ok(items)
+    }
+
+    /// Marks an item as started, recording the starting timestamp if not already set.
+    ///
+    /// # Errors
+    /// Returns an error if the database update fails.
+    pub fn mark_started(&self, id: i64) -> Result<()> {
+        let now = Utc::now().to_rfc3339();
+        self.conn.execute(
+            "UPDATE queue SET started_at = ?1, updated_at = ?1 WHERE id = ?2 AND started_at IS NULL",
+            params![now, id],
+        ).context("failed to mark queue item as started")?;
+        Ok(())
+    }
+
+    /// Promotes a pending item to be downloaded next by setting its priority higher than all other pending items.
+    ///
+    /// # Errors
+    /// Returns an error if database query or update fails.
+    pub fn promote_next(&self, id: i64) -> Result<bool> {
+        let now = Utc::now().to_rfc3339();
+        let max_priority: i64 = self.conn.query_row(
+            "SELECT COALESCE(MAX(priority), 0) FROM queue WHERE status = 'pending'",
+            [],
+            |r| r.get(0),
+        )?;
+        let new_priority = max_priority + 1;
+        let affected = self.conn.execute(
+            "UPDATE queue SET priority = ?1, updated_at = ?2 WHERE id = ?3 AND status = 'pending'",
+            params![new_priority, now, id],
+        )?;
+        Ok(affected > 0)
+    }
+
+    /// Resets orphaned in-progress items ('caching', 'downloading') back to pending on worker start.
+    ///
+    /// # Errors
+    /// Returns an error if database update fails.
+    pub fn reset_in_progress(&self) -> Result<usize> {
+        let now = Utc::now().to_rfc3339();
+        let count = self.conn.execute(
+            "UPDATE queue SET status = 'pending', updated_at = ?1 WHERE status IN ('caching', 'downloading')",
+            params![now],
+        )?;
+        Ok(count)
     }
 
     /// Resets failed item(s) back to pending so they can be re-attempted.
@@ -281,6 +343,13 @@ mod tests {
         db.update_status(item.id, QueueStatus::Completed, None)?;
         let after_complete = db.next_pending()?;
         assert!(after_complete.is_none());
+
+        let item1 = db.enqueue("magnet:?xt=urn:btih:test1&dn=Movie.1", None)?;
+        let item2 = db.enqueue("magnet:?xt=urn:btih:test2&dn=Movie.2", None)?;
+        assert_eq!(db.next_pending()?.map(|i| i.id), Some(item1.id));
+
+        assert!(db.promote_next(item2.id)?);
+        assert_eq!(db.next_pending()?.map(|i| i.id), Some(item2.id));
         Ok(())
     }
 }

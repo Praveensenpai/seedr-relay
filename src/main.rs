@@ -15,7 +15,7 @@ use std::path::PathBuf;
 #[derive(Parser)]
 #[command(name = "seedr-relay")]
 #[command(author = "Praveensenpai <pvnt20@gmail.com>")]
-#[command(version = "0.1.2")]
+#[command(version)]
 #[command(about = "Sequential queue manager and file sanitizer for Seedr.cc")]
 struct Cli {
     /// Direct magnet link to add to queue
@@ -64,6 +64,13 @@ enum Commands {
     Retry {
         /// Specific queue item ID to retry (or omit to retry all failed)
         id: Option<i64>,
+    },
+
+    /// Promote a pending item to be downloaded next
+    #[command(alias = "bump", alias = "priority", alias = "top")]
+    Next {
+        /// Queue item ID to prioritize
+        id: i64,
     },
 
     /// List queued, active, and completed downloads
@@ -117,6 +124,9 @@ async fn main() -> Result<()> {
         }
         Some(Commands::Retry { id }) => {
             commands::handle_retry(id)?;
+        }
+        Some(Commands::Next { id }) => {
+            commands::handle_next(id)?;
         }
         Some(Commands::List { limit }) => {
             commands::handle_list(limit)?;

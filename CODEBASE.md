@@ -64,7 +64,7 @@ Entrypoint ──> CLI/Parser ──> Domain Logic ──> Infra/IO
   fn save_config (config : & Config) -> Result < () >
   ```
 
-### `src/daemon.rs` (Role: general, Lines: 333)
+### `src/daemon.rs` (Role: general, Lines: 342)
 - **Responsibility**: Core general logic in src/daemon.rs
 - **Imports**: use crate :: db :: data_dir , use anyhow :: { Context , Result } , use colored :: Colorize , use serde :: { Deserialize , Serialize } , use std :: fs :: { self , File , OpenOptions } , use std :: io :: { BufRead , BufReader , Seek , SeekFrom , Write } , use std :: path :: PathBuf , use std :: process :: { Command , Stdio } , use std :: time :: Duration , use tokio :: time :: sleep 
 - **Types & Enums**:

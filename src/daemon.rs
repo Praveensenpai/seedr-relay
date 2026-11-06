@@ -140,13 +140,22 @@ pub fn spawn_daemon(output: Option<&std::path::Path>) -> Result<()> {
         args.push(out.to_string_lossy().to_string());
     }
 
-    let child = Command::new(exe)
-        .args(&args)
+    let mut cmd = Command::new(exe);
+    cmd.args(&args)
         .stdin(Stdio::null())
         .stdout(Stdio::from(log_file))
-        .stderr(Stdio::from(stderr_file))
-        .spawn()
-        .context("failed to spawn daemon process")?;
+        .stderr(Stdio::from(stderr_file));
+
+    #[cfg(unix)]
+    unsafe {
+        use std::os::unix::process::CommandExt;
+        cmd.pre_exec(|| {
+            libc::setsid();
+            Ok(())
+        });
+    }
+
+    let child = cmd.spawn().context("failed to spawn daemon process")?;
 
     let pid = child.id();
     fs::write(pid_path(), pid.to_string())

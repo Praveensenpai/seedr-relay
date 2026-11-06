@@ -3,9 +3,9 @@
 use crate::config::{load_config, save_config};
 use crate::daemon;
 use crate::db::{QueueDb, QueueItem, QueueStatus};
+use crate::fmt::{format_duration_between, format_duration_to_now, format_human_time, visible_len};
 use crate::worker;
 use anyhow::{Context, Result};
-use chrono::{DateTime, Utc};
 use colored::Colorize;
 use std::path::{Path, PathBuf};
 
@@ -169,10 +169,37 @@ fn format_progress_col(item: &QueueItem, active: Option<&daemon::ActiveProgress>
                 "queued".dimmed().to_string()
             }
         }
-        QueueStatus::Caching => "caching in cloud".blue().to_string(),
+        QueueStatus::Caching => format_caching_progress(active, item.id),
         QueueStatus::Downloading => format_downloading_progress(active, item.id),
         QueueStatus::Completed => "100% complete".green().to_string(),
         QueueStatus::Failed => "failed".red().to_string(),
+    }
+}
+
+fn format_caching_progress(active: Option<&daemon::ActiveProgress>, item_id: i64) -> String {
+    let Some(a) = active.filter(|a| a.item_id == item_id || a.item_id == 0) else {
+        return "caching in cloud".blue().to_string();
+    };
+
+    if a.percentage > 0.0 {
+        #[allow(clippy::cast_precision_loss)]
+        let mb_s = a.speed_bps as f64 / 1_048_576.0;
+        if a.speed_bps > 0 {
+            let eta_m = a.eta_seconds / 60;
+            let eta_s = a.eta_seconds % 60;
+            format!(
+                "caching {:4.1}% ({mb_s:>3.1} MB/s, ETA {eta_m}m{eta_s:02}s)",
+                a.percentage
+            )
+            .blue()
+            .to_string()
+        } else {
+            format!("caching {:4.1}% in cloud", a.percentage)
+                .blue()
+                .to_string()
+        }
+    } else {
+        "caching in cloud".blue().to_string()
     }
 }
 
@@ -191,44 +218,6 @@ fn format_completed_col(item: &QueueItem) -> String {
         }
         QueueStatus::Pending => "-".dimmed().to_string(),
         QueueStatus::Failed => "failed".red().to_string(),
-    }
-}
-
-fn format_duration_between(start_iso: &str, end_iso: &str) -> String {
-    let Ok(start_dt) = DateTime::parse_from_rfc3339(start_iso) else {
-        return "unknown".to_string();
-    };
-    let Ok(end_dt) = DateTime::parse_from_rfc3339(end_iso) else {
-        return "unknown".to_string();
-    };
-    let diff = end_dt.signed_duration_since(start_dt);
-    format_seconds(diff.num_seconds().max(0))
-}
-
-fn format_duration_to_now(start_iso: &str) -> String {
-    let Ok(start_dt) = DateTime::parse_from_rfc3339(start_iso) else {
-        return "unknown".to_string();
-    };
-    let now = Utc::now();
-    let diff = now.signed_duration_since(start_dt.with_timezone(&Utc));
-    format_seconds(diff.num_seconds().max(0))
-}
-
-fn format_seconds(secs: i64) -> String {
-    if secs < 60 {
-        format!("{secs}s")
-    } else if secs < 3600 {
-        let mins = secs / 60;
-        let rem_s = secs % 60;
-        if rem_s == 0 {
-            format!("{mins}m")
-        } else {
-            format!("{mins}m {rem_s:02}s")
-        }
-    } else {
-        let hours = secs / 3600;
-        let mins = (secs % 3600) / 60;
-        format!("{hours}h {mins}m")
     }
 }
 
@@ -258,50 +247,6 @@ fn format_downloading_progress(active: Option<&daemon::ActiveProgress>, item_id:
             .cyan()
             .to_string()
     }
-}
-
-/// Converts an ISO-8601 UTC timestamp to a human-readable relative duration.
-#[must_use]
-pub fn format_human_time(iso_str: &str) -> String {
-    let Ok(dt) = DateTime::parse_from_rfc3339(iso_str) else {
-        return iso_str.get(..19).unwrap_or(iso_str).to_string();
-    };
-    let now = Utc::now();
-    let diff = now.signed_duration_since(dt.with_timezone(&Utc));
-    let secs = diff.num_seconds();
-
-    if secs < 0 || secs < 45 {
-        "just now".to_string()
-    } else if secs < 90 {
-        "1m ago".to_string()
-    } else if secs < 3600 {
-        format!("{}m ago", secs / 60)
-    } else if secs < 7200 {
-        "1h ago".to_string()
-    } else if secs < 86_400 {
-        format!("{}h ago", secs / 3600)
-    } else if secs < 172_800 {
-        "yesterday".to_string()
-    } else {
-        format!("{}d ago", secs / 86400)
-    }
-}
-
-fn visible_len(s: &str) -> usize {
-    let mut in_esc = false;
-    let mut len = 0;
-    for c in s.chars() {
-        if c == '\x1b' {
-            in_esc = true;
-        } else if in_esc {
-            if c == 'm' {
-                in_esc = false;
-            }
-        } else {
-            len += 1;
-        }
-    }
-    len
 }
 
 /// Handles the `remove` command.
@@ -366,21 +311,4 @@ pub fn handle_config(
         println!("  • Poll Interval     : {}s", cfg.poll_interval_secs);
     }
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn format_human_time_returns_relative_strings() {
-        let now_str = Utc::now().to_rfc3339();
-        assert_eq!(format_human_time(&now_str), "just now");
-
-        let five_mins_ago = (Utc::now() - chrono::Duration::minutes(5)).to_rfc3339();
-        assert_eq!(format_human_time(&five_mins_ago), "5m ago");
-
-        let two_hours_ago = (Utc::now() - chrono::Duration::hours(2)).to_rfc3339();
-        assert_eq!(format_human_time(&two_hours_ago), "2h ago");
-    }
 }

@@ -5,6 +5,7 @@ mod commands;
 mod config;
 mod daemon;
 mod db;
+mod fmt;
 mod notify;
 mod worker;
 

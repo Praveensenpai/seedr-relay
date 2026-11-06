@@ -67,7 +67,7 @@ async fn process_item(
     let client = get_seedr_client()?;
     purge_seedr_cloud(&client).await;
 
-    let folder = wait_and_cache_magnet(&client, &item.magnet).await?;
+    let folder = wait_and_cache_magnet(&client, item.id, &item.magnet).await?;
     db.update_name(item.id, &folder.name)?;
 
     let sz_mb = folder.size.unwrap_or(0) / 1_048_576;
@@ -185,7 +185,11 @@ fn get_seedr_client() -> Result<SeedrClient> {
     Ok(SeedrClient::new(auth.access_token))
 }
 
-async fn wait_and_cache_magnet(client: &SeedrClient, magnet: &str) -> Result<SeedrFolder> {
+async fn wait_and_cache_magnet(
+    client: &SeedrClient,
+    item_id: i64,
+    magnet: &str,
+) -> Result<SeedrFolder> {
     let root_before = client.list_root().await?;
     let prev_ids: Vec<u64> = root_before.folders.iter().map(|f| f.id).collect();
     let name_hint = seedr_dl::extract_magnet_name(magnet);
@@ -197,7 +201,30 @@ async fn wait_and_cache_magnet(client: &SeedrClient, magnet: &str) -> Result<See
         previous_folders: &prev_ids,
     };
 
-    let folder_res = client.wait_for_caching(&query, None).await?;
+    let mut on_progress = |torrent: &seedr_dl::seedr::SeedrTorrent| {
+        let pct = torrent.progress.unwrap_or(0.0);
+        let speed = torrent.download_rate.unwrap_or(0);
+        let total = torrent.size.unwrap_or(0);
+        #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let downloaded = ((pct / 100.0) * total as f64) as u64;
+        let rem = total.saturating_sub(downloaded);
+        let eta = rem.checked_div(speed).unwrap_or(0);
+
+        crate::daemon::save_active_progress(&crate::daemon::ActiveProgress {
+            item_id,
+            name: torrent.name.clone(),
+            downloaded_bytes: downloaded,
+            total_bytes: total,
+            speed_bps: speed,
+            eta_seconds: eta,
+            percentage: pct,
+        });
+    };
+
+    let folder_res = client
+        .wait_for_caching(&query, Some(&mut on_progress))
+        .await?;
+    crate::daemon::clear_active_progress();
     folder_res.context("Could not find cached folder in Seedr cloud")
 }
 

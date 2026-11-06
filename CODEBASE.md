@@ -30,9 +30,9 @@ Entrypoint ──> CLI/Parser ──> Domain Logic ──> Infra/IO
   fn sanitize_folder (folder_path : & Path , original_folder_name : & str , magnet : & str ,) -> Result < SanitizationResult >
   ```
 
-### `src/commands.rs` (Role: general, Lines: 386)
+### `src/commands.rs` (Role: general, Lines: 314)
 - **Responsibility**: Core general logic in src/commands.rs
-- **Imports**: use crate :: config :: { load_config , save_config } , use crate :: daemon , use crate :: db :: { QueueDb , QueueItem , QueueStatus } , use crate :: worker , use anyhow :: { Context , Result } , use chrono :: { DateTime , Utc } , use colored :: Colorize , use std :: path :: { Path , PathBuf } 
+- **Imports**: use crate :: config :: { load_config , save_config } , use crate :: daemon , use crate :: db :: { QueueDb , QueueItem , QueueStatus } , use crate :: fmt :: { format_duration_between , format_duration_to_now , format_human_time , visible_len } , use crate :: worker , use anyhow :: { Context , Result } , use colored :: Colorize , use std :: path :: { Path , PathBuf } 
 - **Public Functions & Signatures**:
   ```rust
   fn handle_add (magnets : & [String] , output : Option < & Path >) -> Result < () >
@@ -42,7 +42,6 @@ Entrypoint ──> CLI/Parser ──> Domain Logic ──> Infra/IO
   fn handle_retry (id : Option < i64 >) -> Result < () >
   fn handle_next (id : i64) -> Result < () >
   fn handle_list (limit : usize) -> Result < () >
-  fn format_human_time (iso_str : & str) -> String
   fn handle_remove (id : i64) -> Result < () >
   fn handle_clean () -> Result < () >
   fn handle_config (save_path : Option < PathBuf > , notify : Option < bool > , show : bool ,) -> Result < () >
@@ -112,7 +111,18 @@ Entrypoint ──> CLI/Parser ──> Domain Logic ──> Infra/IO
   fn data_dir () -> PathBuf
   ```
 
-### `src/main.rs` (Role: general, Lines: 152)
+### `src/fmt.rs` (Role: general, Lines: 116)
+- **Responsibility**: Core general logic in src/fmt.rs
+- **Imports**: use chrono :: { DateTime , Utc } 
+- **Public Functions & Signatures**:
+  ```rust
+  fn format_human_time (iso_str : & str) -> String
+  fn format_duration_between (start_iso : & str , end_iso : & str) -> String
+  fn format_duration_to_now (start_iso : & str) -> String
+  fn visible_len (s : & str) -> usize
+  ```
+
+### `src/main.rs` (Role: general, Lines: 153)
 - **Responsibility**: Core general logic in src/main.rs
 - **Imports**: use anyhow :: Result , use clap :: { Parser , Subcommand } , use std :: path :: PathBuf 
 
@@ -125,7 +135,7 @@ Entrypoint ──> CLI/Parser ──> Domain Logic ──> Infra/IO
   async fn alert (title : & str , body : & str)
   ```
 
-### `src/worker.rs` (Role: general, Lines: 284)
+### `src/worker.rs` (Role: general, Lines: 311)
 - **Responsibility**: Core general logic in src/worker.rs
 - **Imports**: use crate :: cleaner , use crate :: config :: Config , use crate :: db :: { QueueDb , QueueItem , QueueStatus } , use crate :: notify , use anyhow :: { Context , Result } , use colored :: Colorize , use seedr_dl :: seedr :: { CachingQuery , SeedrClient , SeedrFolder } , use std :: fs , use std :: path :: { Path , PathBuf } , use std :: time :: Duration , use tokio :: time :: sleep 
 - **Public Functions & Signatures**:

@@ -9,13 +9,36 @@ use anyhow::{Context, Result};
 use colored::Colorize;
 use std::path::{Path, PathBuf};
 
+/// Validates that an input string is a valid magnet link or .torrent URL.
+///
+/// # Errors
+/// Returns an error if the input string does not match accepted schemes.
+pub fn validate_magnet(input: &str) -> Result<()> {
+    let trimmed = input.trim();
+    let lower = trimmed.to_ascii_lowercase();
+    if lower.starts_with("magnet:?") && lower.contains("xt=urn:") {
+        return Ok(());
+    }
+    if (lower.starts_with("http://") || lower.starts_with("https://"))
+        && (lower.ends_with(".torrent") || lower.contains("torrent"))
+    {
+        return Ok(());
+    }
+    anyhow::bail!(
+        "Invalid magnet or torrent link: '{trimmed}'. Must start with 'magnet:?xt=urn:' or be a .torrent URL."
+    );
+}
+
 /// Handles the `add` command.
 ///
 /// # Errors
-/// Returns an error if queue insertion fails.
+/// Returns an error if queue insertion or link validation fails.
 pub fn handle_add(magnets: &[String], output: Option<&Path>) -> Result<()> {
-    let db = QueueDb::open()?;
+    for magnet in magnets {
+        validate_magnet(magnet)?;
+    }
 
+    let db = QueueDb::open()?;
     for magnet in magnets {
         let item = db.enqueue(magnet, output)?;
         println!(
@@ -311,4 +334,22 @@ pub fn handle_config(
         println!("  • Poll Interval     : {}s", cfg.poll_interval_secs);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validate_magnet_accepts_valid_links() {
+        assert!(validate_magnet("magnet:?xt=urn:btih:abc12345&dn=test").is_ok());
+        assert!(validate_magnet("https://example.com/file.torrent").is_ok());
+    }
+
+    #[test]
+    fn validate_magnet_rejects_invalid_inputs() {
+        assert!(validate_magnet("watch").is_err());
+        assert!(validate_magnet("random text").is_err());
+        assert!(validate_magnet("https://google.com").is_err());
+    }
 }

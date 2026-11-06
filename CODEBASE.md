@@ -30,11 +30,12 @@ Entrypoint ──> CLI/Parser ──> Domain Logic ──> Infra/IO
   fn sanitize_folder (folder_path : & Path , original_folder_name : & str , magnet : & str ,) -> Result < SanitizationResult >
   ```
 
-### `src/commands.rs` (Role: general, Lines: 314)
+### `src/commands.rs` (Role: general, Lines: 355)
 - **Responsibility**: Core general logic in src/commands.rs
 - **Imports**: use crate :: config :: { load_config , save_config } , use crate :: daemon , use crate :: db :: { QueueDb , QueueItem , QueueStatus } , use crate :: fmt :: { format_duration_between , format_duration_to_now , format_human_time , visible_len } , use crate :: worker , use anyhow :: { Context , Result } , use colored :: Colorize , use std :: path :: { Path , PathBuf } 
 - **Public Functions & Signatures**:
   ```rust
+  fn validate_magnet (input : & str) -> Result < () >
   fn handle_add (magnets : & [String] , output : Option < & Path >) -> Result < () >
   async fn handle_run (watch : bool , daemon : bool , output : Option < PathBuf >) -> Result < () >
   async fn handle_attach () -> Result < () >
@@ -63,7 +64,7 @@ Entrypoint ──> CLI/Parser ──> Domain Logic ──> Infra/IO
   fn save_config (config : & Config) -> Result < () >
   ```
 
-### `src/daemon.rs` (Role: general, Lines: 342)
+### `src/daemon.rs` (Role: general, Lines: 353)
 - **Responsibility**: Core general logic in src/daemon.rs
 - **Imports**: use crate :: db :: data_dir , use anyhow :: { Context , Result } , use colored :: Colorize , use serde :: { Deserialize , Serialize } , use std :: fs :: { self , File , OpenOptions } , use std :: io :: { BufRead , BufReader , Seek , SeekFrom , Write } , use std :: path :: PathBuf , use std :: process :: { Command , Stdio } , use std :: time :: Duration , use tokio :: time :: sleep 
 - **Types & Enums**:
@@ -122,7 +123,7 @@ Entrypoint ──> CLI/Parser ──> Domain Logic ──> Infra/IO
   fn visible_len (s : & str) -> usize
   ```
 
-### `src/main.rs` (Role: general, Lines: 153)
+### `src/main.rs` (Role: general, Lines: 154)
 - **Responsibility**: Core general logic in src/main.rs
 - **Imports**: use anyhow :: Result , use clap :: { Parser , Subcommand } , use std :: path :: PathBuf 
 

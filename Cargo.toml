@@ -1,6 +1,6 @@
 [package]
 name = "seedr-relay"
-version = "0.1.5"
+version = "0.1.6"
 edition = "2021"
 authors = ["Praveensenpai <pvnt20@gmail.com>"]
 description = "Sequential queue manager and file sanitizer using seedr-dl"

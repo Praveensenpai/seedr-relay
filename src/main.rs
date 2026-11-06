@@ -143,6 +143,7 @@ async fn main() -> Result<()> {
         }
         None => {
             if let Some(magnet) = cli.magnet {
+                commands::validate_magnet(&magnet)?;
                 commands::handle_add(&[magnet], None)?;
             } else {
                 commands::handle_list(20)?;

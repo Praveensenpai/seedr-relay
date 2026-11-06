@@ -15,7 +15,7 @@ use std::path::PathBuf;
 #[derive(Parser)]
 #[command(name = "seedr-relay")]
 #[command(author = "Praveensenpai <pvnt20@gmail.com>")]
-#[command(version = "0.1.0")]
+#[command(version = "0.1.1")]
 #[command(about = "Sequential queue manager and file sanitizer for Seedr.cc")]
 struct Cli {
     /// Direct magnet link to add to queue

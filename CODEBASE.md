@@ -15,7 +15,7 @@ Entrypoint ──> CLI/Parser ──> Domain Logic ──> Infra/IO
 
 ## 3. Module & Interface Skeleton
 
-### `src/cleaner.rs` (Role: general, Lines: 202)
+### `src/cleaner.rs` (Role: general, Lines: 200)
 - **Responsibility**: Core general logic in src/cleaner.rs
 - **Imports**: use anyhow :: { Context , Result } , use chrono :: Local , use regex :: Regex , use std :: fmt :: Write as _ , use std :: fs , use std :: path :: { Path , PathBuf } 
 - **Types & Enums**:
@@ -30,7 +30,7 @@ Entrypoint ──> CLI/Parser ──> Domain Logic ──> Infra/IO
   fn sanitize_folder (folder_path : & Path , original_folder_name : & str , magnet : & str ,) -> Result < SanitizationResult >
   ```
 
-### `src/commands.rs` (Role: general, Lines: 197)
+### `src/commands.rs` (Role: general, Lines: 201)
 - **Responsibility**: Core general logic in src/commands.rs
 - **Imports**: use crate :: config :: { load_config , save_config } , use crate :: daemon , use crate :: db :: { QueueDb , QueueStatus } , use crate :: worker , use anyhow :: { Context , Result } , use colored :: Colorize , use std :: path :: { Path , PathBuf } 
 - **Public Functions & Signatures**:
@@ -112,7 +112,7 @@ Entrypoint ──> CLI/Parser ──> Domain Logic ──> Infra/IO
   async fn alert (title : & str , body : & str)
   ```
 
-### `src/worker.rs` (Role: general, Lines: 204)
+### `src/worker.rs` (Role: general, Lines: 251)
 - **Responsibility**: Core general logic in src/worker.rs
 - **Imports**: use crate :: cleaner , use crate :: config :: Config , use crate :: db :: { QueueDb , QueueItem , QueueStatus } , use crate :: notify , use anyhow :: { Context , Result } , use colored :: Colorize , use seedr_dl :: seedr :: { CachingQuery , SeedrClient , SeedrFolder } , use std :: fs , use std :: path :: { Path , PathBuf } , use std :: time :: Duration , use tokio :: time :: sleep 
 - **Public Functions & Signatures**:

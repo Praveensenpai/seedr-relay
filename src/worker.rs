@@ -36,15 +36,16 @@ pub async fn process_queue(config: &Config, db: &QueueDb, watch: bool) -> Result
 
 async fn handle_queue_item(config: &Config, db: &QueueDb, item: &QueueItem) -> Result<()> {
     println!("{} [{}] {}", "-> Processing:".yellow().bold(), item.id, item.name);
-    if let Err(err) = process_item(config, db, item).await {
+    let staging_dir = staging_dir_for(item.id);
+    if let Err(err) = process_item(config, db, item, &staging_dir).await {
         eprintln!("{} Failed [{}]: {err:#}", "✖".red(), item.id);
         db.update_status(item.id, QueueStatus::Failed, Some(&format!("{err:#}")))?;
 
-        // Always attempt to free Seedr cloud space on failure so the next
-        // item is not blocked by an orphaned folder.
+        // Free Seedr cloud and remove any half-downloaded staging files on failure
         if let Ok(client) = get_seedr_client() {
             purge_seedr_cloud(&client).await;
         }
+        let _ = fs::remove_dir_all(&staging_dir);
 
         if config.notify {
             notify::alert("Seedr Relay Failed", &format!("{}: {err:#}", item.name)).await;
@@ -53,13 +54,15 @@ async fn handle_queue_item(config: &Config, db: &QueueDb, item: &QueueItem) -> R
     Ok(())
 }
 
-async fn process_item(config: &Config, db: &QueueDb, item: &QueueItem) -> Result<()> {
+async fn process_item(
+    config: &Config,
+    db: &QueueDb,
+    item: &QueueItem,
+    staging_dir: &Path,
+) -> Result<()> {
     db.update_status(item.id, QueueStatus::Caching, None)?;
 
     let client = get_seedr_client()?;
-
-    // Purge any leftover cloud items before adding a new magnet so we
-    // start from a clean slate and avoid "not enough space" errors.
     purge_seedr_cloud(&client).await;
 
     let folder = wait_and_cache_magnet(&client, &item.magnet).await?;
@@ -77,21 +80,24 @@ async fn process_item(config: &Config, db: &QueueDb, item: &QueueItem) -> Result
     }
 
     db.update_status(item.id, QueueStatus::Downloading, None)?;
-    let output_dir = item.output_dir.clone().unwrap_or_else(|| config.save_path.clone());
-    fs::create_dir_all(&output_dir)
-        .with_context(|| format!("failed to create output directory {}", output_dir.display()))?;
+    let _ = fs::remove_dir_all(staging_dir);
+    fs::create_dir_all(staging_dir)
+        .with_context(|| format!("failed to create staging directory {}", staging_dir.display()))?;
 
-    let downloaded_files = download_from_cloud(&client, config, &folder, &output_dir).await?;
-
-    // Explicit cloud cleanup after successful download (belt + suspenders).
+    let downloaded_files = download_from_cloud(&client, &folder, staging_dir).await?;
     let _ = client.delete_folder(folder.id).await;
 
-    let sanitized = post_process_downloads(&output_dir, &folder.name, &downloaded_files, &item.magnet)?;
+    let sanitized = post_process_downloads(staging_dir, &folder.name, &downloaded_files, &item.magnet)?;
+
+    let target_parent = item.output_dir.clone().unwrap_or_else(|| config.save_path.clone());
+    let final_dest = promote_staging_to_target(staging_dir, &sanitized, &target_parent)?;
+
+    let final_note = final_dest.join("note.txt");
     println!(
         "  {} Saved & sanitized to: {} (note: {})",
         "✔".green(),
-        sanitized.target_dir.display(),
-        sanitized.note_path.display()
+        final_dest.display(),
+        final_note.display()
     );
 
     if config.notify {
@@ -99,13 +105,55 @@ async fn process_item(config: &Config, db: &QueueDb, item: &QueueItem) -> Result
             "Name: {}\nCleaned: {}\nSaved: {}\nRenamed {} items (note.txt generated)\nSeedr cloud space reclaimed.",
             folder.name,
             sanitized.target_dir.file_name().and_then(|n| n.to_str()).unwrap_or(&folder.name),
-            sanitized.target_dir.display(),
+            final_dest.display(),
             sanitized.records.len()
         );
         notify::done("Downloaded to Local", &note_summary).await;
     }
 
     db.update_status(item.id, QueueStatus::Completed, None)?;
+    Ok(())
+}
+
+fn promote_staging_to_target(
+    staging_dir: &Path,
+    sanitized: &cleaner::SanitizationResult,
+    target_parent: &Path,
+) -> Result<PathBuf> {
+    fs::create_dir_all(target_parent)?;
+    let folder_name = sanitized.target_dir.file_name().context("invalid folder name")?;
+    let final_dest = target_parent.join(folder_name);
+
+    move_dir_atomic(&sanitized.target_dir, &final_dest)?;
+    let _ = fs::remove_dir_all(staging_dir);
+    Ok(final_dest)
+}
+
+fn staging_dir_for(item_id: i64) -> PathBuf {
+    crate::db::data_dir().join("staging").join(format!("item_{item_id}"))
+}
+
+fn move_dir_atomic(src: &Path, dst: &Path) -> Result<()> {
+    if fs::rename(src, dst).is_ok() {
+        return Ok(());
+    }
+    copy_dir_all(src, dst)?;
+    let _ = fs::remove_dir_all(src);
+    Ok(())
+}
+
+fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
+    fs::create_dir_all(dst)?;
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let entry_path = entry.path();
+        let target_path = dst.join(entry.file_name());
+        if entry_path.is_dir() {
+            copy_dir_all(&entry_path, &target_path)?;
+        } else {
+            fs::copy(&entry_path, &target_path)?;
+        }
+    }
     Ok(())
 }
 
@@ -154,7 +202,6 @@ async fn wait_and_cache_magnet(client: &SeedrClient, magnet: &str) -> Result<See
 
 async fn download_from_cloud(
     client: &SeedrClient,
-    _config: &Config,
     folder: &SeedrFolder,
     output_dir: &Path,
 ) -> Result<Vec<PathBuf>> {

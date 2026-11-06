@@ -157,6 +157,10 @@ pub fn handle_remove(id: i64) -> Result<()> {
 pub fn handle_clean() -> Result<()> {
     let db = QueueDb::open()?;
     let removed = db.clean_completed()?;
+    let staging_base = crate::db::data_dir().join("staging");
+    if staging_base.exists() {
+        let _ = std::fs::remove_dir_all(staging_base);
+    }
     println!("  {} Cleared {removed} completed items from queue.", "✔".green());
     Ok(())
 }

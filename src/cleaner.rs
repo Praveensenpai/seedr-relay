@@ -19,7 +19,6 @@ pub struct RenameRecord {
 pub struct SanitizationResult {
     pub target_dir: PathBuf,
     pub records: Vec<RenameRecord>,
-    pub note_path: PathBuf,
 }
 
 /// Cleans unwanted release tags, resolution flags, and watermarks from a title.
@@ -124,7 +123,6 @@ pub fn sanitize_folder(
     Ok(SanitizationResult {
         target_dir: final_dir,
         records,
-        note_path,
     })
 }
 

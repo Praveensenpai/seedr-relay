@@ -23,6 +23,17 @@ pub struct ActiveProgress {
     pub percentage: f64,
 }
 
+#[derive(Deserialize)]
+struct CacheState {
+    total_size: u64,
+    chunks: Vec<CacheChunk>,
+}
+
+#[derive(Deserialize)]
+struct CacheChunk {
+    downloaded: u64,
+}
+
 /// Returns the path to the active download state file: `~/.local/share/seedr-relay/active.json`.
 #[must_use]
 pub fn active_path() -> PathBuf {
@@ -41,8 +52,48 @@ pub fn save_active_progress(progress: &ActiveProgress) {
 #[must_use]
 pub fn load_active_progress() -> Option<ActiveProgress> {
     let path = active_path();
-    let content = fs::read_to_string(path).ok()?;
-    serde_json::from_str(&content).ok()
+    if let Ok(content) = fs::read_to_string(path) {
+        if let Ok(prog) = serde_json::from_str::<ActiveProgress>(&content) {
+            return Some(prog);
+        }
+    }
+    load_fallback_progress_from_cache()
+}
+
+fn load_fallback_progress_from_cache() -> Option<ActiveProgress> {
+    let cache_dir = dirs::cache_dir()?.join("seedr-dl/downloads");
+    if !cache_dir.is_dir() {
+        return None;
+    }
+
+    for entry in fs::read_dir(cache_dir).ok()? {
+        let entry = entry.ok()?;
+        let path = entry.path();
+        let name_str = path.file_name()?.to_str()?;
+        if name_str.ends_with(".state.json") {
+            let content = fs::read_to_string(&path).ok()?;
+            let state: CacheState = serde_json::from_str(&content).ok()?;
+            let downloaded_bytes: u64 = state.chunks.iter().map(|c| c.downloaded).sum();
+            #[allow(clippy::cast_precision_loss)]
+            let percentage = if state.total_size > 0 {
+                (downloaded_bytes as f64 / state.total_size as f64) * 100.0
+            } else {
+                0.0
+            };
+            let file_stem = name_str.trim_end_matches(".state.json").to_string();
+
+            return Some(ActiveProgress {
+                item_id: 0,
+                name: file_stem,
+                downloaded_bytes,
+                total_bytes: state.total_size,
+                speed_bps: 0,
+                eta_seconds: 0,
+                percentage,
+            });
+        }
+    }
+    None
 }
 
 /// Clears the active download state.
@@ -184,10 +235,6 @@ fn render_progress_bar(p: &ActiveProgress) {
     let total_gb = p.total_bytes as f64 / 1_073_741_824.0;
     #[allow(clippy::cast_precision_loss)]
     let dl_gb = p.downloaded_bytes as f64 / 1_073_741_824.0;
-    #[allow(clippy::cast_precision_loss)]
-    let speed_mb = p.speed_bps as f64 / 1_048_576.0;
-    let eta_m = p.eta_seconds / 60;
-    let eta_s = p.eta_seconds % 60;
 
     let width = 28_usize;
     #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation, clippy::cast_sign_loss)]
@@ -195,10 +242,21 @@ fn render_progress_bar(p: &ActiveProgress) {
     let filled = filled.min(width);
     let bar = format!("{}{}", "━".repeat(filled).cyan(), "─".repeat(width - filled).dimmed());
 
-    print!(
-        "\r\x1b[K  [{bar}] {:5.1}% ({dl_gb:.2}/{total_gb:.2} GiB) • {:>4.1} MB/s • ETA {eta_m}m {eta_s:02}s",
-        p.percentage, speed_mb
-    );
+    if p.speed_bps > 0 {
+        #[allow(clippy::cast_precision_loss)]
+        let speed_mb = p.speed_bps as f64 / 1_048_576.0;
+        let eta_m = p.eta_seconds / 60;
+        let eta_s = p.eta_seconds % 60;
+        print!(
+            "\r\x1b[K  [{bar}] {:5.1}% ({dl_gb:.2}/{total_gb:.2} GiB) • {:>4.1} MB/s • ETA {eta_m}m {eta_s:02}s",
+            p.percentage, speed_mb
+        );
+    } else {
+        print!(
+            "\r\x1b[K  [{bar}] {:5.1}% ({dl_gb:.2}/{total_gb:.2} GiB)",
+            p.percentage
+        );
+    }
     let _ = std::io::stdout().flush();
 }
 

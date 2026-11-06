@@ -30,7 +30,7 @@ Entrypoint ──> CLI/Parser ──> Domain Logic ──> Infra/IO
   fn sanitize_folder (folder_path : & Path , original_folder_name : & str , magnet : & str ,) -> Result < SanitizationResult >
   ```
 
-### `src/commands.rs` (Role: general, Lines: 293)
+### `src/commands.rs` (Role: general, Lines: 308)
 - **Responsibility**: Core general logic in src/commands.rs
 - **Imports**: use crate :: config :: { load_config , save_config } , use crate :: daemon , use crate :: db :: { QueueDb , QueueItem , QueueStatus } , use crate :: worker , use anyhow :: { Context , Result } , use chrono :: { DateTime , Utc } , use colored :: Colorize , use std :: path :: { Path , PathBuf } 
 - **Public Functions & Signatures**:
@@ -63,7 +63,7 @@ Entrypoint ──> CLI/Parser ──> Domain Logic ──> Infra/IO
   fn save_config (config : & Config) -> Result < () >
   ```
 
-### `src/daemon.rs` (Role: general, Lines: 275)
+### `src/daemon.rs` (Role: general, Lines: 333)
 - **Responsibility**: Core general logic in src/daemon.rs
 - **Imports**: use crate :: db :: data_dir , use anyhow :: { Context , Result } , use colored :: Colorize , use serde :: { Deserialize , Serialize } , use std :: fs :: { self , File , OpenOptions } , use std :: io :: { BufRead , BufReader , Seek , SeekFrom , Write } , use std :: path :: PathBuf , use std :: process :: { Command , Stdio } , use std :: time :: Duration , use tokio :: time :: sleep 
 - **Types & Enums**:

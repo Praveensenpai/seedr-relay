@@ -148,22 +148,37 @@ fn format_progress_col(item: &QueueItem, active: Option<&daemon::ActiveProgress>
     match item.status {
         QueueStatus::Pending => "queued".dimmed().to_string(),
         QueueStatus::Caching => "caching in cloud".blue().to_string(),
-        QueueStatus::Downloading => {
-            if let Some(a) = active.filter(|a| a.item_id == item.id) {
-                #[allow(clippy::cast_precision_loss)]
-                let mb_s = a.speed_bps as f64 / 1_048_576.0;
-                let eta_m = a.eta_seconds / 60;
-                let eta_s = a.eta_seconds % 60;
-                format!(
-                    "{:5.1}% ({mb_s:>4.1} MB/s, ETA {eta_m}m{eta_s:02}s)",
-                    a.percentage
-                ).cyan().to_string()
-            } else {
-                "downloading...".cyan().to_string()
-            }
-        }
+        QueueStatus::Downloading => format_downloading_progress(active, item.id),
         QueueStatus::Completed => "100% complete".green().to_string(),
         QueueStatus::Failed => "failed".red().to_string(),
+    }
+}
+
+fn format_downloading_progress(active: Option<&daemon::ActiveProgress>, item_id: i64) -> String {
+    let Some(a) = active.filter(|a| a.item_id == item_id || a.item_id == 0) else {
+        return "downloading...".cyan().to_string();
+    };
+
+    #[allow(clippy::cast_precision_loss)]
+    let total_gb = a.total_bytes as f64 / 1_073_741_824.0;
+    #[allow(clippy::cast_precision_loss)]
+    let dl_gb = a.downloaded_bytes as f64 / 1_073_741_824.0;
+
+    if a.speed_bps > 0 {
+        #[allow(clippy::cast_precision_loss)]
+        let mb_s = a.speed_bps as f64 / 1_048_576.0;
+        let eta_m = a.eta_seconds / 60;
+        let eta_s = a.eta_seconds % 60;
+        format!(
+            "{:5.1}% ({mb_s:>4.1} MB/s, ETA {eta_m}m{eta_s:02}s)",
+            a.percentage
+        )
+        .cyan()
+        .to_string()
+    } else {
+        format!("{:5.1}% ({dl_gb:.2}/{total_gb:.2} GiB)", a.percentage)
+            .cyan()
+            .to_string()
     }
 }
 

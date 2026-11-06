@@ -1,0 +1,101 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Setup Rust Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "seedr-relay-release-${{ matrix.target }}"
+          save-if: true
+
+      - name: Build release binary
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Package release archive (.tar.gz)
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          mkdir -p staging
+          cp target/${{ matrix.target }}/release/seedr-relay staging/
+          cd staging
+          tar -czf ../seedr-relay-${{ matrix.target }}.tar.gz seedr-relay
+          cd ..
+
+      - name: Upload artifact
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: seedr-relay-${{ matrix.target }}.tar.gz
+
+  publish-release:
+    name: Publish GitHub Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download all built artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ⚡ seedr-relay ${{ github.ref_name }}
+          body: |
+            ⚡ **seedr-relay ${{ github.ref_name }}** ✨
+            Sequential queue manager, cloud purger, and media title sanitizer powered by `seedr-dl`.
+
+            ### 🌟 Key Highlights
+            - 📥 **Persistent FIFO Queue**: SQLite-backed queue allows adding magnets anytime without interrupting active downloads.
+            - 🔄 **Autonomous Cloud Purging**: Automatically deletes completed cloud torrents/folders on finish and cleans up on failure so your Seedr quota never gets locked.
+            - 🔔 **Two-Stage Telegram Alerts**: Notifies via `tayori done` upon cloud caching completion and local download completion.
+            - 🛠️ **Daemon & Attach Controls**: Run with `seedr-relay run --daemon`, monitor live output with `seedr-relay attach`, stop gracefully with `seedr-relay stop`.
+            - 🧹 **Media Sanitizer & Ingestion Record**: Cleans spam release tags and resolution markers, generating an audit `note.txt` with original -> cleaned name mapping.
+            - 📂 **Configurable Paths**: Customize local download destinations globally or per magnet.
+
+            ### 🚀 One-Liner Install
+            ```bash
+            curl -LsSf https://raw.githubusercontent.com/Praveensenpai/seedr-relay/main/install.sh | bash
+            ```
+
+            ### 📦 Release Assets
+            - **Linux (x86_64)**: `seedr-relay-x86_64-unknown-linux-gnu.tar.gz`
+          generate_release_notes: true
+          draft: false
+          prerelease: false
+          files: artifacts/*.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

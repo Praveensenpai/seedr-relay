@@ -2,9 +2,10 @@
 
 use crate::config::{load_config, save_config};
 use crate::daemon;
-use crate::db::{QueueDb, QueueStatus};
+use crate::db::{QueueDb, QueueItem, QueueStatus};
 use crate::worker;
 use anyhow::{Context, Result};
+use chrono::{DateTime, Utc};
 use colored::Colorize;
 use std::path::{Path, PathBuf};
 
@@ -96,44 +97,118 @@ pub fn handle_list(limit: usize) -> Result<()> {
     }
 
     println!("  {}", "Seedr Relay Queue:".cyan().bold());
-    println!("  {:<4} {:<12} {:<40} {:<20}", "ID", "STATUS", "NAME", "CREATED");
-    println!("  {}", "-".repeat(78));
+    println!(
+        "  {:<4} {:<14} {:<32} {:<40} {:<12}",
+        "ID", "STATUS", "PROGRESS", "NAME", "ADDED"
+    );
+    println!("  {}", "-".repeat(106));
 
+    let active = daemon::load_active_progress();
     for item in items {
-        let status_str = item.status.as_str();
-        let status_colored = match item.status {
-            QueueStatus::Pending => status_str.yellow(),
-            QueueStatus::Caching => status_str.blue(),
-            QueueStatus::Downloading => status_str.cyan(),
-            QueueStatus::Completed => status_str.green(),
-            QueueStatus::Failed => status_str.red(),
-        };
-
-        let pad_len = 12_usize.saturating_sub(status_str.len());
-        let status_display = format!("{status_colored}{}", " ".repeat(pad_len));
-
-        let short_name = if item.name.len() > 38 {
-            format!("{}...", &item.name[..35])
-        } else {
-            item.name.clone()
-        };
-
-        let short_date = if item.created_at.len() > 19 {
-            &item.created_at[..19]
-        } else {
-            &item.created_at
-        };
-
-        println!(
-            "  {:<4} {} {:<40} {:<20}",
-            item.id, status_display, short_name, short_date
-        );
-
-        if let Some(ref err) = item.error_msg {
-            println!("       {} {}", "Error:".red(), err);
-        }
+        print_queue_row(&item, active.as_ref());
     }
     Ok(())
+}
+
+fn print_queue_row(item: &QueueItem, active: Option<&daemon::ActiveProgress>) {
+    let status_str = item.status.as_str();
+    let status_colored = match item.status {
+        QueueStatus::Pending => status_str.yellow(),
+        QueueStatus::Caching => status_str.blue(),
+        QueueStatus::Downloading => status_str.cyan(),
+        QueueStatus::Completed => status_str.green(),
+        QueueStatus::Failed => status_str.red(),
+    };
+
+    let status_pad = " ".repeat(14_usize.saturating_sub(status_str.len()));
+    let status_display = format!("{status_colored}{status_pad}");
+
+    let progress_str = format_progress_col(item, active);
+    let progress_pad = " ".repeat(32_usize.saturating_sub(visible_len(&progress_str)));
+
+    let short_name = if item.name.len() > 38 {
+        format!("{}...", &item.name[..35])
+    } else {
+        item.name.clone()
+    };
+
+    let human_time = format_human_time(&item.created_at);
+
+    println!(
+        "  {:<4} {} {progress_str}{progress_pad} {:<40} {:<12}",
+        item.id, status_display, short_name, human_time
+    );
+
+    if let Some(ref err) = item.error_msg {
+        println!("       {} {}", "Error:".red(), err);
+    }
+}
+
+fn format_progress_col(item: &QueueItem, active: Option<&daemon::ActiveProgress>) -> String {
+    match item.status {
+        QueueStatus::Pending => "queued".dimmed().to_string(),
+        QueueStatus::Caching => "caching in cloud".blue().to_string(),
+        QueueStatus::Downloading => {
+            if let Some(a) = active.filter(|a| a.item_id == item.id) {
+                #[allow(clippy::cast_precision_loss)]
+                let mb_s = a.speed_bps as f64 / 1_048_576.0;
+                let eta_m = a.eta_seconds / 60;
+                let eta_s = a.eta_seconds % 60;
+                format!(
+                    "{:5.1}% ({mb_s:>4.1} MB/s, ETA {eta_m}m{eta_s:02}s)",
+                    a.percentage
+                ).cyan().to_string()
+            } else {
+                "downloading...".cyan().to_string()
+            }
+        }
+        QueueStatus::Completed => "100% complete".green().to_string(),
+        QueueStatus::Failed => "failed".red().to_string(),
+    }
+}
+
+/// Converts an ISO-8601 UTC timestamp to a human-readable relative duration.
+#[must_use]
+pub fn format_human_time(iso_str: &str) -> String {
+    let Ok(dt) = DateTime::parse_from_rfc3339(iso_str) else {
+        return iso_str.get(..19).unwrap_or(iso_str).to_string();
+    };
+    let now = Utc::now();
+    let diff = now.signed_duration_since(dt.with_timezone(&Utc));
+    let secs = diff.num_seconds();
+
+    if secs < 0 || secs < 45 {
+        "just now".to_string()
+    } else if secs < 90 {
+        "1m ago".to_string()
+    } else if secs < 3600 {
+        format!("{}m ago", secs / 60)
+    } else if secs < 7200 {
+        "1h ago".to_string()
+    } else if secs < 86_400 {
+        format!("{}h ago", secs / 3600)
+    } else if secs < 172_800 {
+        "yesterday".to_string()
+    } else {
+        format!("{}d ago", secs / 86400)
+    }
+}
+
+fn visible_len(s: &str) -> usize {
+    let mut in_esc = false;
+    let mut len = 0;
+    for c in s.chars() {
+        if c == '\x1b' {
+            in_esc = true;
+        } else if in_esc {
+            if c == 'm' {
+                in_esc = false;
+            }
+        } else {
+            len += 1;
+        }
+    }
+    len
 }
 
 /// Handles the `remove` command.
@@ -198,4 +273,21 @@ pub fn handle_config(
         println!("  • Poll Interval     : {}s", cfg.poll_interval_secs);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn format_human_time_returns_relative_strings() {
+        let now_str = Utc::now().to_rfc3339();
+        assert_eq!(format_human_time(&now_str), "just now");
+
+        let five_mins_ago = (Utc::now() - chrono::Duration::minutes(5)).to_rfc3339();
+        assert_eq!(format_human_time(&five_mins_ago), "5m ago");
+
+        let two_hours_ago = (Utc::now() - chrono::Duration::hours(2)).to_rfc3339();
+        assert_eq!(format_human_time(&two_hours_ago), "2h ago");
+    }
 }

@@ -40,12 +40,12 @@ async fn handle_queue_item(config: &Config, db: &QueueDb, item: &QueueItem) -> R
     if let Err(err) = process_item(config, db, item, &staging_dir).await {
         eprintln!("{} Failed [{}]: {err:#}", "✖".red(), item.id);
         db.update_status(item.id, QueueStatus::Failed, Some(&format!("{err:#}")))?;
+        crate::daemon::clear_active_progress();
 
-        // Free Seedr cloud and remove any half-downloaded staging files on failure
+        // Free Seedr cloud on failure so next item isn't blocked by cloud quota
         if let Ok(client) = get_seedr_client() {
             purge_seedr_cloud(&client).await;
         }
-        let _ = fs::remove_dir_all(&staging_dir);
 
         if config.notify {
             notify::alert("Seedr Relay Failed", &format!("{}: {err:#}", item.name)).await;
@@ -80,11 +80,10 @@ async fn process_item(
     }
 
     db.update_status(item.id, QueueStatus::Downloading, None)?;
-    let _ = fs::remove_dir_all(staging_dir);
     fs::create_dir_all(staging_dir)
         .with_context(|| format!("failed to create staging directory {}", staging_dir.display()))?;
 
-    let downloaded_files = download_from_cloud(&client, &folder, staging_dir).await?;
+    let downloaded_files = download_from_cloud(&client, item.id, &folder, staging_dir).await?;
     let _ = client.delete_folder(folder.id).await;
 
     let sanitized = post_process_downloads(staging_dir, &folder.name, &downloaded_files, &item.magnet)?;
@@ -202,15 +201,45 @@ async fn wait_and_cache_magnet(client: &SeedrClient, magnet: &str) -> Result<See
 
 async fn download_from_cloud(
     client: &SeedrClient,
+    item_id: i64,
     folder: &SeedrFolder,
     output_dir: &Path,
 ) -> Result<Vec<PathBuf>> {
+    let progress_id = item_id;
+    let progress_name = folder.name.clone();
+    let callback_fn: seedr_dl::EventCallback = std::sync::Arc::new(move |event| {
+        if let seedr_dl::NotificationEvent::Progress {
+            downloaded_bytes,
+            total_bytes,
+            speed_bps,
+            eta_seconds,
+            percentage,
+            ..
+        } = event
+        {
+            crate::daemon::save_active_progress(&crate::daemon::ActiveProgress {
+                item_id: progress_id,
+                name: progress_name.clone(),
+                downloaded_bytes,
+                total_bytes,
+                speed_bps,
+                eta_seconds,
+                percentage,
+            });
+        }
+    });
+
+    let notifier = seedr_dl::Notifier::new(seedr_dl::NotifierConfig {
+        callback_url: None,
+        json_output: false,
+        callback_fn: Some(callback_fn),
+        progress_interval_ms: 250,
+    });
+
     let transfer = seedr_dl::TransferOptions {
         output_dir: output_dir.to_path_buf(),
-        // Do NOT auto-delete on the transfer layer — we handle deletion
-        // explicitly after success so a failure doesn't silently skip cleanup.
         delete_cloud: false,
-        notifier: None,
+        notifier: Some(&notifier),
     };
     let seedr_cfg = seedr_dl::Config {
         download_dir: output_dir.to_path_buf(),
@@ -218,7 +247,9 @@ async fn download_from_cloud(
         download_threads: 2,
     };
 
-    seedr_dl::transfer_download_folder(client, &seedr_cfg, folder, &transfer).await
+    let res = seedr_dl::transfer_download_folder(client, &seedr_cfg, folder, &transfer).await;
+    crate::daemon::clear_active_progress();
+    res
 }
 
 fn post_process_downloads(

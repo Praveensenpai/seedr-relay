@@ -3,12 +3,52 @@
 use crate::db::data_dir;
 use anyhow::{Context, Result};
 use colored::Colorize;
+use serde::{Deserialize, Serialize};
 use std::fs::{self, File, OpenOptions};
-use std::io::{BufRead, BufReader, Seek, SeekFrom};
+use std::io::{BufRead, BufReader, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 use tokio::time::sleep;
+
+/// Active download progress persisted in `~/.local/share/seedr-relay/active.json`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ActiveProgress {
+    pub item_id: i64,
+    pub name: String,
+    pub downloaded_bytes: u64,
+    pub total_bytes: u64,
+    pub speed_bps: u64,
+    pub eta_seconds: u64,
+    pub percentage: f64,
+}
+
+/// Returns the path to the active download state file: `~/.local/share/seedr-relay/active.json`.
+#[must_use]
+pub fn active_path() -> PathBuf {
+    data_dir().join("active.json")
+}
+
+/// Persists the active download progress to disk.
+pub fn save_active_progress(progress: &ActiveProgress) {
+    let path = active_path();
+    if let Ok(json) = serde_json::to_string(progress) {
+        let _ = fs::write(path, json);
+    }
+}
+
+/// Loads active download progress if a download is in flight.
+#[must_use]
+pub fn load_active_progress() -> Option<ActiveProgress> {
+    let path = active_path();
+    let content = fs::read_to_string(path).ok()?;
+    serde_json::from_str(&content).ok()
+}
+
+/// Clears the active download state.
+pub fn clear_active_progress() {
+    let _ = fs::remove_file(active_path());
+}
 
 /// Returns the path to the daemon PID file: `~/.local/share/seedr-relay/daemon.pid`.
 #[must_use]
@@ -67,7 +107,7 @@ pub fn spawn_daemon(output: Option<&std::path::Path>) -> Result<()> {
     Ok(())
 }
 
-/// Attaches to live daemon output, streaming newly appended lines until Ctrl+C.
+/// Attaches to live daemon output, streaming newly appended lines and live progress until Ctrl+C.
 ///
 /// # Errors
 /// Returns an error if reading the log file fails.
@@ -84,7 +124,7 @@ pub async fn attach_daemon() -> Result<()> {
     };
 
     println!(
-        "  {} Attaching to daemon output {}... (Press Ctrl+C to detach)",
+        "  {} Attaching to daemon output {}... (Press Ctrl+C to detach)\n",
         "==>".cyan().bold(),
         pid_info
     );
@@ -92,22 +132,23 @@ pub async fn attach_daemon() -> Result<()> {
     let mut file = File::open(&path)
         .with_context(|| format!("failed to open {}", path.display()))?;
 
-    // Seek near end: last 4KB or beginning
     let meta = file.metadata()?;
     let start_pos = meta.len().saturating_sub(4096);
     file.seek(SeekFrom::Start(start_pos))?;
 
     let mut reader = BufReader::new(file);
     let mut line = String::new();
+    let mut last_progress_drawn = false;
 
     loop {
         line.clear();
         match reader.read_line(&mut line) {
             Ok(0) => {
-                sleep(Duration::from_millis(300)).await;
+                handle_idle(&mut last_progress_drawn);
+                sleep(Duration::from_millis(250)).await;
             }
             Ok(_) => {
-                print!("{line}");
+                handle_line(&line, &mut last_progress_drawn);
             }
             Err(e) => {
                 eprintln!("Error reading log: {e}");
@@ -116,6 +157,49 @@ pub async fn attach_daemon() -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn handle_idle(last_progress_drawn: &mut bool) {
+    if let Some(p) = load_active_progress() {
+        render_progress_bar(&p);
+        *last_progress_drawn = true;
+    } else if *last_progress_drawn {
+        print!("\r\x1b[K");
+        let _ = std::io::stdout().flush();
+        *last_progress_drawn = false;
+    }
+}
+
+fn handle_line(line: &str, last_progress_drawn: &mut bool) {
+    if *last_progress_drawn {
+        print!("\r\x1b[K");
+        *last_progress_drawn = false;
+    }
+    print!("{line}");
+    let _ = std::io::stdout().flush();
+}
+
+fn render_progress_bar(p: &ActiveProgress) {
+    #[allow(clippy::cast_precision_loss)]
+    let total_gb = p.total_bytes as f64 / 1_073_741_824.0;
+    #[allow(clippy::cast_precision_loss)]
+    let dl_gb = p.downloaded_bytes as f64 / 1_073_741_824.0;
+    #[allow(clippy::cast_precision_loss)]
+    let speed_mb = p.speed_bps as f64 / 1_048_576.0;
+    let eta_m = p.eta_seconds / 60;
+    let eta_s = p.eta_seconds % 60;
+
+    let width = 28_usize;
+    #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let filled = ((p.percentage / 100.0) * width as f64).round() as usize;
+    let filled = filled.min(width);
+    let bar = format!("{}{}", "━".repeat(filled).cyan(), "─".repeat(width - filled).dimmed());
+
+    print!(
+        "\r\x1b[K  [{bar}] {:5.1}% ({dl_gb:.2}/{total_gb:.2} GiB) • {:>4.1} MB/s • ETA {eta_m}m {eta_s:02}s",
+        p.percentage, speed_mb
+    );
+    let _ = std::io::stdout().flush();
 }
 
 /// Stops the running daemon process gracefully.

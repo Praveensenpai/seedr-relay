@@ -30,9 +30,9 @@ Entrypoint ──> CLI/Parser ──> Domain Logic ──> Infra/IO
   fn sanitize_folder (folder_path : & Path , original_folder_name : & str , magnet : & str ,) -> Result < SanitizationResult >
   ```
 
-### `src/commands.rs` (Role: general, Lines: 201)
+### `src/commands.rs` (Role: general, Lines: 293)
 - **Responsibility**: Core general logic in src/commands.rs
-- **Imports**: use crate :: config :: { load_config , save_config } , use crate :: daemon , use crate :: db :: { QueueDb , QueueStatus } , use crate :: worker , use anyhow :: { Context , Result } , use colored :: Colorize , use std :: path :: { Path , PathBuf } 
+- **Imports**: use crate :: config :: { load_config , save_config } , use crate :: daemon , use crate :: db :: { QueueDb , QueueItem , QueueStatus } , use crate :: worker , use anyhow :: { Context , Result } , use chrono :: { DateTime , Utc } , use colored :: Colorize , use std :: path :: { Path , PathBuf } 
 - **Public Functions & Signatures**:
   ```rust
   fn handle_add (magnets : & [String] , output : Option < & Path >) -> Result < () >
@@ -41,6 +41,7 @@ Entrypoint ──> CLI/Parser ──> Domain Logic ──> Infra/IO
   async fn handle_stop () -> Result < () >
   fn handle_retry (id : Option < i64 >) -> Result < () >
   fn handle_list (limit : usize) -> Result < () >
+  fn format_human_time (iso_str : & str) -> String
   fn handle_remove (id : i64) -> Result < () >
   fn handle_clean () -> Result < () >
   fn handle_config (save_path : Option < PathBuf > , notify : Option < bool > , show : bool ,) -> Result < () >
@@ -62,11 +63,19 @@ Entrypoint ──> CLI/Parser ──> Domain Logic ──> Infra/IO
   fn save_config (config : & Config) -> Result < () >
   ```
 
-### `src/daemon.rs` (Role: general, Lines: 191)
+### `src/daemon.rs` (Role: general, Lines: 275)
 - **Responsibility**: Core general logic in src/daemon.rs
-- **Imports**: use crate :: db :: data_dir , use anyhow :: { Context , Result } , use colored :: Colorize , use std :: fs :: { self , File , OpenOptions } , use std :: io :: { BufRead , BufReader , Seek , SeekFrom } , use std :: path :: PathBuf , use std :: process :: { Command , Stdio } , use std :: time :: Duration , use tokio :: time :: sleep 
+- **Imports**: use crate :: db :: data_dir , use anyhow :: { Context , Result } , use colored :: Colorize , use serde :: { Deserialize , Serialize } , use std :: fs :: { self , File , OpenOptions } , use std :: io :: { BufRead , BufReader , Seek , SeekFrom , Write } , use std :: path :: PathBuf , use std :: process :: { Command , Stdio } , use std :: time :: Duration , use tokio :: time :: sleep 
+- **Types & Enums**:
+  ```rust
+  pub struct ActiveProgress
+  ```
 - **Public Functions & Signatures**:
   ```rust
+  fn active_path () -> PathBuf
+  fn save_active_progress (progress : & ActiveProgress)
+  fn load_active_progress () -> Option < ActiveProgress >
+  fn clear_active_progress ()
   fn pid_path () -> PathBuf
   fn log_path () -> PathBuf
   fn spawn_daemon (output : Option < & std :: path :: Path >) -> Result < () >
@@ -112,7 +121,7 @@ Entrypoint ──> CLI/Parser ──> Domain Logic ──> Infra/IO
   async fn alert (title : & str , body : & str)
   ```
 
-### `src/worker.rs` (Role: general, Lines: 251)
+### `src/worker.rs` (Role: general, Lines: 282)
 - **Responsibility**: Core general logic in src/worker.rs
 - **Imports**: use crate :: cleaner , use crate :: config :: Config , use crate :: db :: { QueueDb , QueueItem , QueueStatus } , use crate :: notify , use anyhow :: { Context , Result } , use colored :: Colorize , use seedr_dl :: seedr :: { CachingQuery , SeedrClient , SeedrFolder } , use std :: fs , use std :: path :: { Path , PathBuf } , use std :: time :: Duration , use tokio :: time :: sleep 
 - **Public Functions & Signatures**:

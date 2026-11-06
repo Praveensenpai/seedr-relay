@@ -245,11 +245,22 @@ fn render_progress_bar(p: &ActiveProgress) {
     #[allow(clippy::cast_precision_loss)]
     let dl_gb = p.downloaded_bytes as f64 / 1_073_741_824.0;
 
-    let width = 28_usize;
+    let width = 24_usize;
     #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let filled = ((p.percentage / 100.0) * width as f64).round() as usize;
     let filled = filled.min(width);
     let bar = format!("{}{}", "━".repeat(filled).cyan(), "─".repeat(width - filled).dimmed());
+
+    let short_title = if p.name.len() > 28 {
+        format!("{}...", &p.name[..25])
+    } else {
+        p.name.clone()
+    };
+    let title_prefix = if p.item_id > 0 {
+        format!("[{}] {short_title}", p.item_id)
+    } else {
+        short_title
+    };
 
     if p.speed_bps > 0 {
         #[allow(clippy::cast_precision_loss)]
@@ -257,13 +268,13 @@ fn render_progress_bar(p: &ActiveProgress) {
         let eta_m = p.eta_seconds / 60;
         let eta_s = p.eta_seconds % 60;
         print!(
-            "\r\x1b[K  [{bar}] {:5.1}% ({dl_gb:.2}/{total_gb:.2} GiB) • {:>4.1} MB/s • ETA {eta_m}m {eta_s:02}s",
-            p.percentage, speed_mb
+            "\r\x1b[K  {} [{bar}] {:5.1}% ({dl_gb:.2}/{total_gb:.2} GiB) • {:>4.1} MB/s • ETA {eta_m}m {eta_s:02}s",
+            title_prefix.dimmed(), p.percentage, speed_mb
         );
     } else {
         print!(
-            "\r\x1b[K  [{bar}] {:5.1}% ({dl_gb:.2}/{total_gb:.2} GiB)",
-            p.percentage
+            "\r\x1b[K  {} [{bar}] {:5.1}% ({dl_gb:.2}/{total_gb:.2} GiB)",
+            title_prefix.dimmed(), p.percentage
         );
     }
     let _ = std::io::stdout().flush();
